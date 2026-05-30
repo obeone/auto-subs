@@ -402,7 +402,6 @@ impl ModelManager {
             "moonshine-tiny-uk" => "tiny-uk",
             "moonshine-tiny-vi" => "tiny-vi",
             "moonshine-base" => "base",
-            "moonshine-base-es" => "base-es",
             _ => bail!("Unknown Moonshine model: {}", model),
         };
 
@@ -1126,9 +1125,9 @@ fn validate_model_file(path: &Path) -> Result<()> {
     // The resolved blob path in HF caches is typically a hash with no extension.
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     let stem = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    // Whisper GGUF models follow the pattern "ggml-{model}.bin" (e.g. ggml-large-v3.bin,
-    // ggml-medium.en.bin). The VAD model is "ggml-silero-v5.1.2.bin" — a different binary
-    // format that is much smaller (~885 KB), so we must not apply Whisper-specific rules to it.
+    // whisper.cpp models use the ggml-{model}.bin naming convention. The VAD model
+    // is also named ggml-*.bin, but is much smaller and uses a different binary
+    // format, so keep Whisper-specific cache sanity checks away from it.
     let is_whisper_bin = ext == "bin" && stem.starts_with("ggml-") && !stem.contains("silero");
     let min_bytes: u64 = if is_whisper_bin {
         // Smallest Whisper model (tiny.en) is ~77 MB; 50 MB catches partial downloads that
@@ -1164,6 +1163,8 @@ fn validate_model_file(path: &Path) -> Result<()> {
             );
         }
     }
+    // This is only a cheap cache/download sanity check. whisper-rs/whisper.cpp
+    // remains the authority on whether a model is actually compatible.
 
     if blob_path.extension().and_then(|e| e.to_str()) == Some("zip") {
         let file = fs::File::open(&blob_path).context("open failed")?;
