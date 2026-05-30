@@ -1,5 +1,6 @@
 use clap::Parser;
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 use tokio::process::Command;
 use transcription_engine::{
@@ -45,7 +46,8 @@ struct Cli {
     /// Input video or audio file
     input: PathBuf,
 
-    /// Output SRT file path (default: input name with .srt extension; also used to derive --output-type output path)
+    /// Output file path, or "-" to write to stdout (default: input name with the
+    /// matching extension; also used to derive --output-type output path)
     #[arg(short = 'o', long)]
     output: Option<PathBuf>,
 
@@ -135,17 +137,46 @@ struct Cli {
     delete_input_after_mkv_output: bool,
 }
 
+/// Whether the given output path means "write to stdout" (the conventional "-").
+fn is_stdout(output: Option<&PathBuf>) -> bool {
+    output.map_or(false, |p| p.as_os_str() == "-")
+}
+
+/// Write the generated transcript content verbatim to stdout.
+fn write_stdout(content: &str) -> eyre::Result<()> {
+    let stdout = std::io::stdout();
+    let mut handle = stdout.lock();
+    handle
+        .write_all(content.as_bytes())
+        .and_then(|_| handle.flush())
+        .map_err(|e| eyre::eyre!("Failed to write to stdout: {}", e))
+}
+
 fn main() -> eyre::Result<()> {
     // Route whisper.cpp native logs through Rust's tracing system
     transcription_engine::install_logging_hooks();
-    let filter = tracing_subscriber::EnvFilter::builder()
-        .with_default_directive(tracing::level_filters::LevelFilter::INFO.into())
-        .from_env_lossy()
-        .add_directive("whisper_rs=warn".parse().unwrap())
-        .add_directive("transcription_engine=warn".parse().unwrap());
-    tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let cli = Cli::parse();
+
+    // When the result is streamed to stdout ("-"), logs must go to stderr to
+    // keep the piped output clean.
+    let to_stdout = is_stdout(cli.output.as_ref());
+
+    let make_filter = || {
+        tracing_subscriber::EnvFilter::builder()
+            .with_default_directive(tracing::level_filters::LevelFilter::INFO.into())
+            .from_env_lossy()
+            .add_directive("whisper_rs=warn".parse().unwrap())
+            .add_directive("transcription_engine=warn".parse().unwrap())
+    };
+    if to_stdout {
+        tracing_subscriber::fmt()
+            .with_env_filter(make_filter())
+            .with_writer(std::io::stderr)
+            .init();
+    } else {
+        tracing_subscriber::fmt().with_env_filter(make_filter()).init();
+    }
 
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(run(cli))
@@ -155,6 +186,13 @@ async fn run(cli: Cli) -> eyre::Result<()> {
     let input = cli.input.canonicalize().map_err(|e| {
         eyre::eyre!("Input file not found: {} ({})", cli.input.display(), e)
     })?;
+
+    let to_stdout = is_stdout(cli.output.as_ref());
+    if to_stdout && cli.output_type == "mkv" {
+        return Err(eyre::eyre!(
+            "--output-type mkv cannot be combined with '-o -': mkvmerge requires a real output file"
+        ));
+    }
 
     let had_output = cli.output.is_some();
     let output = cli.output.unwrap_or_else(|| {
@@ -167,8 +205,13 @@ async fn run(cli: Cli) -> eyre::Result<()> {
         p
     });
 
+    let output_label = if to_stdout {
+        "<stdout>".to_string()
+    } else {
+        output.display().to_string()
+    };
     tracing::info!("Input: {}", input.display());
-    tracing::info!("Output: {}", output.display());
+    tracing::info!("Output: {}", output_label);
     tracing::info!("Model: {}", cli.model);
     tracing::info!("Language: {}", cli.language);
 
@@ -333,12 +376,25 @@ async fn run(cli: Cli) -> eyre::Result<()> {
             let transcript = generate_json(&formatted_segments, &output_language, elapsed);
             let json_content = serde_json::to_string_pretty(&transcript)
                 .map_err(|e| eyre::eyre!("JSON serialization failed: {}", e))?;
-            fs::write(&output, &json_content)?;
-            tracing::info!("JSON transcript written to: {}", output.display());
+            if to_stdout {
+                write_stdout(&json_content)?;
+                tracing::info!("JSON transcript written to stdout");
+            } else {
+                fs::write(&output, &json_content)?;
+                tracing::info!("JSON transcript written to: {}", output.display());
+            }
         }
         _ => {
             // --- SRT output (used directly or as intermediate for MKV) ---
             let srt_content = generate_srt(&formatted_segments);
+            if to_stdout {
+                write_stdout(&srt_content)?;
+                tracing::info!("SRT written to stdout");
+                // Nothing on disk: metadata preservation and MKV muxing don't apply.
+                let _ = fs::remove_file(&normalized);
+                tracing::info!("Cleaned up normalized audio");
+                return Ok(());
+            }
             fs::write(&output, &srt_content)?;
             tracing::info!("SRT written to: {}", output.display());
 
