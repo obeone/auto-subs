@@ -28,6 +28,7 @@ import { Field, FieldGroup } from "@/components/ui/field";
 import { initI18n, normalizeUiLanguage } from "@/i18n";
 import { uiLanguages } from "@/lib/languages";
 import { useRef } from "react";
+import { HistorySettingsSection } from "@/components/dialogs/history-settings-section";
 
 interface SettingsDialogProps {
   open: boolean;
@@ -229,6 +230,9 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                 </Field>
               </FieldGroup>
             </div>
+
+            {/* Transcript history & storage */}
+            <HistorySettingsSection />
 
             {/* Command-line tool */}
             {cliStatus && (

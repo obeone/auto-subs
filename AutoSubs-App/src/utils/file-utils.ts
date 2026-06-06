@@ -18,8 +18,31 @@ import {
 } from "@tauri-apps/plugin-fs";
 import { platform } from "@tauri-apps/plugin-os";
 import { Subtitle, Speaker } from "@/types";
+import {
+  selectTranscriptsToPrune,
+  isUnlimitedRetention,
+  type RetentionPolicy,
+} from "@/utils/retention";
+
+export type { RetentionPolicy } from "@/utils/retention";
 
 const TRANSCRIPT_INDEX_FILENAME = "transcript-index.json";
+
+// Module-level override for the transcripts storage directory. When null, the
+// default app-local-data location is used. Set from SettingsContext on hydration
+// and whenever the user changes the storage location, so the many existing
+// callers of getSubtitleDocumentsDir() keep working unchanged.
+let storageDirOverride: string | null = null;
+
+/** Set (or clear, with null) the custom transcripts storage directory. */
+export function setTranscriptStorageDirOverride(dir: string | null): void {
+  storageDirOverride = dir && dir.trim().length > 0 ? dir : null;
+}
+
+/** The currently configured custom storage directory, or null for the default. */
+export function getTranscriptStorageDirOverride(): string | null {
+  return storageDirOverride;
+}
 
 function normalizeTranscriptText(text: string): string {
   return text.replace(/\s+/g, " ").trim();
@@ -454,15 +477,15 @@ async function migrateLegacyTranscriptsOnce(newDir: string): Promise<void> {
   return migrationPromise;
 }
 
-// Get the transcripts storage directory.
-// Stored under the Tauri app-local-data directory (e.g. on macOS:
-// ~/Library/Application Support/<bundle-id>/Transcripts). This keeps
-// user-generated data out of Documents and avoids cloud-sync surprises
+// The default transcripts storage directory, under the Tauri app-local-data
+// directory (e.g. on macOS: ~/Library/Application Support/<bundle-id>/Transcripts).
+// This keeps user-generated data out of Documents and avoids cloud-sync surprises
 // (OneDrive/iCloud), while surviving app updates.
-export async function getSubtitleDocumentsDir(): Promise<string> {
-  const dir = await join(await appLocalDataDir(), "Transcripts");
+export async function getDefaultSubtitleDocumentsDir(): Promise<string> {
+  return await join(await appLocalDataDir(), "Transcripts");
+}
 
-  // Ensure the directory exists
+async function ensureSubtitleDocumentsDir(dir: string): Promise<void> {
   try {
     if (!(await exists(dir))) {
       await mkdir(dir, { recursive: true });
@@ -472,8 +495,22 @@ export async function getSubtitleDocumentsDir(): Promise<string> {
     console.error("Failed to create transcripts directory:", error);
     throw new Error(`Failed to create transcripts directory: ${error}`);
   }
+}
+
+// Get the active transcripts storage directory: a user-configured custom
+// location if set (see setTranscriptStorageDirOverride), otherwise the default.
+export async function getSubtitleDocumentsDir(): Promise<string> {
+  if (storageDirOverride) {
+    await ensureSubtitleDocumentsDir(storageDirOverride);
+    return storageDirOverride;
+  }
+
+  const dir = await getDefaultSubtitleDocumentsDir();
+  await ensureSubtitleDocumentsDir(dir);
 
   // Fire-and-await a one-time migration from the legacy Documents folder.
+  // Only relevant for the default location; custom locations are managed
+  // explicitly via moveTranscriptsTo().
   await migrateLegacyTranscriptsOnce(dir);
 
   return dir;
@@ -900,4 +937,100 @@ export async function deleteSubtitleDocument(filename: string): Promise<void> {
     console.error("Failed to delete transcript:", filename, error);
     throw new Error(`Failed to delete transcript: ${String(error)}`);
   }
+}
+
+/**
+ * Move all transcript files (and the index) from the current active storage
+ * directory into `targetDir`. Mirrors the legacy migration: prefers rename and
+ * falls back to copy+remove across filesystems, and never clobbers an existing
+ * destination file.
+ *
+ * Call this BEFORE updating the stored transcriptStorageDir setting, so that
+ * getSubtitleDocumentsDir() still resolves to the old location as the source.
+ *
+ * @returns the number of files moved.
+ */
+export async function moveTranscriptsTo(
+  targetDir: string,
+): Promise<{ moved: number }> {
+  const sourceDir = await getSubtitleDocumentsDir();
+  if (!targetDir || sourceDir === targetDir) {
+    return { moved: 0 };
+  }
+
+  await ensureSubtitleDocumentsDir(targetDir);
+
+  let entries;
+  try {
+    entries = await readDir(sourceDir);
+  } catch (err) {
+    console.warn("Could not read source transcripts directory:", err);
+    return { moved: 0 };
+  }
+
+  const jsonEntries = entries.filter(
+    (e) => e.isFile && e.name && e.name.toLowerCase().endsWith(".json"),
+  );
+
+  let moved = 0;
+  for (const entry of jsonEntries) {
+    const src = await join(sourceDir, entry.name);
+    const dest = await join(targetDir, entry.name);
+    try {
+      if (await exists(dest)) {
+        // Destination already has this file; skip to avoid clobbering.
+        continue;
+      }
+      try {
+        await rename(src, dest);
+      } catch {
+        // rename can fail across filesystems; fall back to copy + remove.
+        await copyFile(src, dest);
+        await remove(src);
+      }
+      moved++;
+    } catch (err) {
+      console.warn(`Failed to move transcript ${entry.name}:`, err);
+    }
+  }
+
+  console.log(`Moved ${moved} transcript file(s) to ${targetDir}`);
+  return { moved };
+}
+
+/**
+ * Apply a retention policy to the stored transcripts, deleting any that fall
+ * outside the configured count / age limits. Selection is delegated to the pure
+ * selectTranscriptsToPrune() (see retention.ts); this function only performs the
+ * filesystem deletions. Failures on individual files are logged, not thrown.
+ *
+ * @param policy Retention limits (null = unlimited, 0 = keep none).
+ * @param now    Reference time in epoch ms (defaults to Date.now()).
+ * @returns the filenames that were deleted.
+ */
+export async function pruneTranscripts(
+  policy: RetentionPolicy,
+  now: number = Date.now(),
+): Promise<{ deleted: string[] }> {
+  if (isUnlimitedRetention(policy)) {
+    return { deleted: [] };
+  }
+
+  const docs = await listSubtitleDocuments();
+  const filenames = selectTranscriptsToPrune(docs, policy, now);
+
+  const deleted: string[] = [];
+  for (const filename of filenames) {
+    try {
+      await deleteSubtitleDocument(filename);
+      deleted.push(filename);
+    } catch (err) {
+      console.warn(`Failed to prune transcript ${filename}:`, err);
+    }
+  }
+
+  if (deleted.length > 0) {
+    console.log(`Pruned ${deleted.length} transcript(s) by retention policy.`);
+  }
+  return { deleted };
 }

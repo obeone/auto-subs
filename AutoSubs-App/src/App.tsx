@@ -17,8 +17,10 @@ import { useSubtitleDocument } from "@/contexts/SubtitleDocumentContext"
 import { useIsMobile } from "@/hooks/use-mobile"
 import {
   listSubtitleDocumentIndex,
+  pruneTranscripts,
   type SubtitleDocumentListItem,
 } from "@/utils/file-utils"
+import { TRANSCRIPTS_CHANGED_EVENT } from "@/components/dialogs/history-settings-section"
 
 const MIN_TRANSCRIPTION_PANEL_WIDTH = 370
 const MIN_SUBTITLE_PANEL_WIDTH = 280
@@ -99,8 +101,42 @@ function AppContentBody() {
     }
   }, [])
 
+  // On launch (once settings are hydrated), apply the retention policy and then
+  // load the transcript list. The storage-location override is already applied
+  // by SettingsContext during hydration, so pruning targets the right folder.
+  const launchPrunedRef = React.useRef(false)
   React.useEffect(() => {
-    void loadTranscriptDocuments()
+    if (!isHydrated) return
+    if (launchPrunedRef.current) {
+      void loadTranscriptDocuments()
+      return
+    }
+    launchPrunedRef.current = true
+    void (async () => {
+      try {
+        await pruneTranscripts({
+          maxCount: settings.historyMaxCount,
+          maxAgeMinutes: settings.historyMaxAgeMinutes,
+        })
+      } catch (error) {
+        console.error("Failed to apply retention policy on launch:", error)
+      } finally {
+        await loadTranscriptDocuments()
+      }
+    })()
+  }, [
+    isHydrated,
+    settings.historyMaxCount,
+    settings.historyMaxAgeMinutes,
+    loadTranscriptDocuments,
+  ])
+
+  // Reload the transcript list when storage changes from elsewhere (e.g. the
+  // settings dialog after a manual cleanup or a storage-location change).
+  React.useEffect(() => {
+    const handler = () => void loadTranscriptDocuments()
+    window.addEventListener(TRANSCRIPTS_CHANGED_EVENT, handler)
+    return () => window.removeEventListener(TRANSCRIPTS_CHANGED_EVENT, handler)
   }, [loadTranscriptDocuments])
 
   // Priority gating: only show one onboarding-style dialog at a time.
