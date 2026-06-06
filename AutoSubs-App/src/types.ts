@@ -104,6 +104,14 @@ export interface Settings {
     transcriptionsCompleted: number;
     subSlateMilestoneShown: boolean;
 
+    // Transcript history / storage settings
+    // null = use the default app-local-data Transcripts directory.
+    transcriptStorageDir: string | null;
+    // Retention limits. For both: null = unlimited (keep everything),
+    // 0 = keep nothing. Any positive value is the maximum to retain.
+    historyMaxCount: number | null;       // max number of transcripts to keep
+    historyMaxAgeMinutes: number | null;  // max age (in minutes) to keep
+
     // Processing settings
     model: number; // index of model in models array
     language: string,
