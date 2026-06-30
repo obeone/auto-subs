@@ -4,6 +4,15 @@ version = "0.1.0"
 edition = "2024"
 description = "CLI for AutoSubs - generate subtitles from video/audio files"
 
+[features]
+# No GPU backend by default (CPU-only build). Enable one explicitly at build
+# time, e.g. `cargo build -p autosubs-cli --release --features cuda`. Each flag
+# forwards to the matching transcription-engine backend.
+default = []
+cuda = ["transcription-engine/cuda"]
+vulkan = ["transcription-engine/vulkan"]
+metal = ["transcription-engine/metal"]
+
 [dependencies]
 transcription-engine = { path = "../transcription-engine", default-features = false }
 clap = { version = "4", features = ["derive"] }
