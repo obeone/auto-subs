@@ -13,7 +13,8 @@ import {
   resolveSubtitleDocumentFilename,
   readSubtitleDocument,
   saveSubtitleDocument,
-  updateSubtitleDocument
+  updateSubtitleDocument,
+  pruneTranscripts
 } from '../utils/file-utils';
 import { reformatSubtitles as rustReformatSubtitles } from '@/api/formatting-api';
 import { generateSrt, parseSrt } from '@/utils/srt-utils';
@@ -194,6 +195,18 @@ export function SubtitleDocumentProvider({ children }: { children: React.ReactNo
     // Ensure the font for the detected transcription language is registered
     // (important when settings.language === "auto").
     loadFontForLanguage(transcript?.language);
+
+    // Apply the retention policy now that a new transcript has been saved.
+    // The newest transcript (this one) is always kept unless the user has
+    // explicitly set a limit of 0 ("keep nothing").
+    try {
+      await pruneTranscripts({
+        maxCount: settings.historyMaxCount,
+        maxAgeMinutes: settings.historyMaxAgeMinutes,
+      });
+    } catch (error) {
+      console.error("Failed to apply retention policy after transcription:", error);
+    }
 
     return filename
   }

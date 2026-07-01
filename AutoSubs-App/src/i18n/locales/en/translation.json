@@ -4,7 +4,41 @@
     "description": "Configure your AutoSubs preferences and options.",
     "sections": {
       "transcription": "Transcription",
-      "language": "Language"
+      "language": "Language",
+      "history": "History"
+    },
+    "history": {
+      "unlimited": "Unlimited",
+      "cleanupNow": "Clean up now",
+      "choosePrompt": "Choose transcripts folder",
+      "cleaned": "Removed {{count}} transcript(s)",
+      "cleanFailed": "Cleanup failed",
+      "moved": "Moved {{count}} transcript(s)",
+      "moveFailed": "Failed to move transcripts",
+      "location": {
+        "title": "Storage location",
+        "change": "Change…",
+        "reset": "Reset to default"
+      },
+      "maxCount": {
+        "title": "Maximum transcripts",
+        "description": "Keep only the most recent transcripts"
+      },
+      "maxAge": {
+        "title": "Maximum age",
+        "description": "Delete transcripts older than this"
+      },
+      "units": {
+        "minutes": "minutes",
+        "hours": "hours",
+        "days": "days"
+      },
+      "move": {
+        "title": "Change storage location",
+        "description": "Move your existing transcripts to the new folder, or leave them where they are and start fresh?",
+        "moveExisting": "Move existing",
+        "startFresh": "Start fresh"
+      }
     },
     "gpu": {
       "title": "GPU Acceleration",

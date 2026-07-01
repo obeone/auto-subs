@@ -10,6 +10,7 @@ import {
 } from "@/lib/models";
 import { DEFAULT_PRESET_ID } from "@/presets/built-in-presets";
 import { loadFontForLanguage } from "@/lib/font-loader";
+import { setTranscriptStorageDirOverride } from "@/utils/file-utils";
 
 export const DEFAULT_SETTINGS: Settings = {
   // Mode
@@ -30,6 +31,13 @@ export const DEFAULT_SETTINGS: Settings = {
   // Milestone tracking
   transcriptionsCompleted: 0,
   subSlateMilestoneShown: false,
+
+  // Transcript history / storage settings.
+  // Defaults preserve existing behaviour: default storage location and
+  // unlimited retention (no transcripts are deleted unless the user opts in).
+  transcriptStorageDir: null,
+  historyMaxCount: null,
+  historyMaxAgeMinutes: null,
 
   // Processing settings
   model: 0,
@@ -125,6 +133,11 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
             uiLanguage: getPreferredUiLanguage(),
           } as Settings);
 
+      // Apply the custom transcript storage location (if any) before any
+      // component reads/lists transcripts. Child effects run before parent
+      // effects on mount, so this must happen here rather than in a useEffect.
+      setTranscriptStorageDirOverride(hydratedSettings.transcriptStorageDir ?? null);
+
       initI18n(hydratedSettings.uiLanguage);
       setSettings(hydratedSettings);
       setStore(loadedStore);
@@ -149,6 +162,12 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     if (!isHydrated) return;
     initI18n(settings.uiLanguage);
   }, [settings.uiLanguage, isHydrated]);
+
+  // Keep the transcript storage location in sync when the user changes it.
+  useEffect(() => {
+    if (!isHydrated) return;
+    setTranscriptStorageDirOverride(settings.transcriptStorageDir ?? null);
+  }, [settings.transcriptStorageDir, isHydrated]);
 
   // Lazy-load the appropriate font for the currently selected languages so
   // non-Latin text (CJK, Arabic, Devanagari, Thai, etc.) renders correctly.
