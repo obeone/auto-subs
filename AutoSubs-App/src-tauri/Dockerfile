@@ -3,8 +3,12 @@
 # =============================================================================
 # autosubs-cli - linux/amd64 image with NVIDIA CUDA GPU acceleration
 #
-# Build context MUST be this directory (the Cargo workspace root):
-#   docker buildx build --platform linux/amd64 -f Dockerfile -t autosubs:cuda .
+# Build context MUST be the AutoSubs-App/ directory (the PARENT of the Cargo
+# workspace), because the engine embeds ../../../../models.json at compile time
+# via include_str!, and that file lives at AutoSubs-App/models.json, one level
+# above the src-tauri workspace root. From AutoSubs-App/:
+#   docker buildx build --platform linux/amd64 -f src-tauri/Dockerfile -t autosubs:cuda .
+# The .dockerignore sits at the context root (AutoSubs-App/.dockerignore).
 #
 # Run (requires nvidia-container-toolkit on the host):
 #   docker run --rm --gpus all \
@@ -40,7 +44,9 @@ RUN rm -f /etc/apt/apt.conf.d/docker-clean; \
     echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
 
 # Toolchain + native build deps. clang/libclang for whisper-rs bindgen, cmake
-# for ggml, the rest for fetching crates and the onnxruntime tarball.
+# for ggml, libssl-dev for the openssl-sys crate (pulled in transitively by the
+# HTTP client used to download models), the rest for fetching crates and the
+# onnxruntime tarball.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
@@ -49,6 +55,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         clang \
         libclang-dev \
         pkg-config \
+        libssl-dev \
         git \
         curl \
         ca-certificates \
@@ -68,8 +75,13 @@ ENV CUDA_PATH=/usr/local/cuda \
     CMAKE_CUDA_ARCHITECTURES=${CUDA_ARCHITECTURES} \
     CUDAARCHS=${CUDA_ARCHITECTURES}
 
-# Copy the whole workspace (cheap layer; .dockerignore keeps target/ etc. out).
+# Copy the whole AutoSubs-App context (cheap layer; .dockerignore keeps
+# node_modules, target/ etc. out). This brings both models.json and the
+# src-tauri cargo workspace into the image.
 COPY . .
+
+# The cargo workspace lives in the src-tauri subdirectory.
+WORKDIR /build/src-tauri
 
 # Build only the CLI crate (and its deps), not the Tauri app. Cargo registry,
 # git and target dirs are cache-mounted across builds; the binary is copied out
@@ -77,6 +89,7 @@ COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/build/target \
+    CARGO_TARGET_DIR=/build/target \
     cargo build -p autosubs-cli --release --features cuda \
  && cp /build/target/release/autosubs-cli /usr/local/bin/autosubs
 
@@ -110,6 +123,7 @@ RUN rm -f /etc/apt/apt.conf.d/docker-clean; \
 # ffmpeg: always required (audio normalization).
 # mkvtoolnix: provides mkvmerge, only used by --output-type mkv.
 # libgomp1: OpenMP runtime used by ggml.
+# libssl3: OpenSSL runtime for the dynamically linked openssl-sys (HTTP client).
 # libcudnn9-cuda-12: required for the onnxruntime CUDA execution provider
 #   (ONNX-based models + diarization on GPU). If you only use Whisper you can
 #   drop this line; ONNX models then fall back to CPU.
@@ -119,6 +133,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         ffmpeg \
         mkvtoolnix \
         libgomp1 \
+        libssl3 \
         ca-certificates \
         libcudnn9-cuda-12 \
  && rm -rf /var/lib/apt/lists/*

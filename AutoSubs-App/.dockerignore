@@ -1,0 +1,36 @@
+# Build context = AutoSubs-App/ (parent of the src-tauri Cargo workspace).
+# The autosubs-cli image only needs the Rust workspace under src-tauri plus
+# models.json. Keep the context small: drop the frontend deps/build output and
+# all Rust/target artifacts.
+
+# Frontend dependencies and build output
+node_modules/
+**/node_modules/
+dist/
+build/
+out/
+.next/
+.svelte-kit/
+.vite/
+
+# Rust build artifacts (workspace + per-crate)
+src-tauri/target/
+**/target/
+
+# Tauri generated files (not needed to build the standalone CLI)
+src-tauri/gen/
+
+# VCS, editor, OS noise
+.git/
+.gitignore
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+*.log
+
+# The image definition itself
+src-tauri/Dockerfile
+src-tauri/.dockerignore
+.dockerignore
